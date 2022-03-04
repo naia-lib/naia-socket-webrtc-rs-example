@@ -1,0 +1,16 @@
+[package]
+name = "naia-socket-server"
+version = "0.1.0"
+authors = ["connorcarpenter <connorcarpenter@gmail.com>"]
+workspace = ".."
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+
+[features]
+
+[dependencies]
+naia-server-socket = { version = "=0.8.0", features = [ "use-webrtc" ] }
+naia-socket-shared = { version = "=0.8.0" }
+log = "0.4"
+simple_logger = { version = "=2.0.0" }

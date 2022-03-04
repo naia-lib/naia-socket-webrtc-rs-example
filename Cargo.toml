@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "naia-socket-server",
+    "webrtc-rs-client",
+    ]
+resolver = "2"
