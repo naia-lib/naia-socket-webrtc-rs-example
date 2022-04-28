@@ -2,7 +2,7 @@
 ### Purpose:
 It would be great to run a Rust server that can communicate with both Wasm & Native
 clients via an unordered and unreliable transport layer right? That is a primary goal
-of [naia-socket](https://github.com/naia-lib/naia/socket), and getting there includes
+of [naia-socket](https://github.com/naia-lib/naia/tree/main/socket), and getting there includes
 getting this example to work correctly! I need help on this, and so here's an
 easy-to-clone example for those who might be able to help to jump into it a bit easier.
 
