@@ -1,28 +1,37 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use bytes::Bytes;
-use std::sync::Arc;
-use tokio::time::Duration;
-use webrtc::api::setting_engine::SettingEngine;
-use webrtc::api::APIBuilder;
-use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
-use webrtc::ice_transport::ice_server::RTCIceServer;
-use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-
 use reqwest::Client as HttpClient;
 use tinyjson::JsonValue;
-use webrtc::dtls_transport::dtls_role::DTLSRole;
-use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
-use webrtc::peer_connection::sdp::sdp_type::RTCSdpType;
+use tokio::time::Duration;
+
+use webrtc::{
+    api::{setting_engine::SettingEngine, APIBuilder},
+    data_channel::data_channel_init::RTCDataChannelInit,
+    dtls_transport::dtls_role::DTLSRole,
+    ice_transport::ice_candidate::RTCIceCandidateInit,
+    peer_connection::{
+        configuration::RTCConfiguration, sdp::sdp_type::RTCSdpType,
+        sdp::session_description::RTCSessionDescription,
+    },
+};
 
 const MESSAGE_SIZE: usize = 1500;
+
+mod addr_cell;
+use addr_cell::{AddrCell, ServerAddr};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // setup logging
     env_logger::Builder::new()
-        .filter(None, log::LevelFilter::Trace)
+        .filter(None, log::LevelFilter::Info)
         .init();
+
+    log::info!("Client Demo started");
+
+    let addr_cell = AddrCell::default();
 
     // create a SettingEngine and enable Detach
     let mut setting_engine = SettingEngine::default();
@@ -36,22 +45,14 @@ async fn main() -> Result<()> {
         .with_setting_engine(setting_engine)
         .build();
 
-    // prepare the connection's configuration
-    let peer_connection_config = RTCConfiguration {
-        ice_servers: vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-
     // create a new RTCPeerConnection
-    let peer_connection = Arc::new(api.new_peer_connection(peer_connection_config).await?);
+    let peer_connection = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
 
     // create a config for our new datachannel
     let mut data_channel_config = RTCDataChannelInit::default();
     data_channel_config.ordered = Some(false);
     data_channel_config.max_retransmits = Some(0);
+    data_channel_config.id = Some(0);
 
     // create a datachannel with label 'data'
     let data_channel = peer_connection
@@ -70,15 +71,11 @@ async fn main() -> Result<()> {
 
     // datachannel on_open callback
     let data_channel_ref = Arc::clone(&data_channel);
+    let addr_cell_ref = addr_cell.clone();
     data_channel
         .on_open(Box::new(move || {
-            println!(
-                "Data channel '{}'-'{}' open.",
-                data_channel_ref.label(),
-                data_channel_ref.id()
-            );
-
             let data_channel_ref_2 = Arc::clone(&data_channel_ref);
+            let addr_cell_ref_2 = addr_cell_ref.clone();
             Box::pin(async move {
                 let detached_data_channel = data_channel_ref_2
                     .detach()
@@ -88,32 +85,21 @@ async fn main() -> Result<()> {
                 // Handle reading from the data channel
                 let detached_data_channel_1 = Arc::clone(&detached_data_channel);
                 let detached_data_channel_2 = Arc::clone(&detached_data_channel);
+                let detached_addr_cell_1 = addr_cell_ref_2.clone();
+                let detached_addr_cell_2 = addr_cell_ref_2.clone();
                 tokio::spawn(async move {
-                    read_loop(detached_data_channel_1)
+                    read_loop(detached_addr_cell_1, detached_data_channel_1)
                         .await
                         .expect("error in read_loop!");
                 });
 
                 // Handle writing to the data channel
                 tokio::spawn(async move {
-                    write_loop(detached_data_channel_2)
+                    write_loop(detached_addr_cell_2, detached_data_channel_2)
                         .await
                         .expect("error in write_loop!");
                 });
             })
-        }))
-        .await;
-
-    // peer_connection's on_ice_candidate callback
-    peer_connection
-        .on_ice_candidate(Box::new(move |candidate_opt| {
-            if let Some(candidate) = &candidate_opt {
-                println!("received ice candidate from: {}", candidate.address);
-            } else {
-                println!("all local candidates received");
-            }
-
-            Box::pin(async {})
         }))
         .await;
 
@@ -155,11 +141,15 @@ async fn main() -> Result<()> {
         .set_remote_description(session_description)
         .await?;
 
+    addr_cell
+        .receive_candidate(session_response.candidate.candidate.as_str())
+        .await;
+
     // create ice candidate
     let ice_candidate = RTCIceCandidateInit {
         candidate: session_response.candidate.candidate,
-        sdp_mid: session_response.candidate.sdp_mid,
-        sdp_mline_index: session_response.candidate.sdp_m_line_index,
+        sdp_mid: Some(session_response.candidate.sdp_mid),
+        sdp_mline_index: Some(session_response.candidate.sdp_m_line_index),
         ..Default::default()
     };
     // add ice candidate to connection
@@ -172,7 +162,10 @@ async fn main() -> Result<()> {
 }
 
 // read_loop shows how to read from the datachannel directly
-async fn read_loop(data_channel: Arc<webrtc::data::data_channel::DataChannel>) -> Result<()> {
+async fn read_loop(
+    addr_cell: AddrCell,
+    data_channel: Arc<webrtc::data::data_channel::DataChannel>,
+) -> Result<()> {
     let mut buffer = vec![0u8; MESSAGE_SIZE];
     loop {
         let message_length = match data_channel.read(&mut buffer).await {
@@ -183,24 +176,36 @@ async fn read_loop(data_channel: Arc<webrtc::data::data_channel::DataChannel>) -
             }
         };
 
-        println!(
-            "Message from DataChannel: {}",
+        let addr = match addr_cell.get().await {
+            ServerAddr::Found(addr) => addr.to_string(),
+            ServerAddr::Finding => "".to_string(),
+        };
+        log::info!(
+            "Client recv <- {}: {}",
+            addr,
             String::from_utf8(buffer[..message_length].to_vec())?
         );
     }
 }
 
 // write_loop shows how to write to the datachannel directly
-async fn write_loop(data_channel: Arc<webrtc::data::data_channel::DataChannel>) -> Result<()> {
+async fn write_loop(
+    addr_cell: AddrCell,
+    data_channel: Arc<webrtc::data::data_channel::DataChannel>,
+) -> Result<()> {
     let mut result = Result::<usize>::Ok(0);
     while result.is_ok() {
-        let timeout = tokio::time::sleep(Duration::from_secs(5));
+        let timeout = tokio::time::sleep(Duration::from_secs(1));
         tokio::pin!(timeout);
 
         tokio::select! {
             _ = timeout.as_mut() =>{
+                let addr = match addr_cell.get().await {
+                    ServerAddr::Found(addr) => addr.to_string(),
+                    ServerAddr::Finding => "".to_string(),
+                };
                 let message = "PING".to_string();
-                println!("Sending '{}'", message);
+                log::info!("Client send -> {}: {}", addr, message);
                 result = data_channel.write(&Bytes::from(message)).await.map_err(Into::into);
             }
         };
