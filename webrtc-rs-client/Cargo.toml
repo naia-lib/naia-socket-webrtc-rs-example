@@ -8,13 +8,12 @@ edition = "2018"
 publish = false
 
 [features]
+use_webrtc = [ "webrtc-unreliable-client/use_webrtc" ]
+use_proxy = [ "webrtc-unreliable-client/use_proxy" ]
 
 [dependencies]
-webrtc-unreliable-client-full = { path = "../../webrtc-unreliable-client/full" }
+webrtc-unreliable-client = { path = "../../webrtc-unreliable-client/client" }
 tokio = { version = "1.15", features = ["full"] }
 anyhow = "1.0"
-bytes = "1.1"
-reqwest = { version = "0.11", features = ["rustls-tls"] }
-tinyjson = { version = "2.3" }
 env_logger = { version = "0.9" }
 log = { version = "0.4" }

@@ -1,13 +1,8 @@
-use std::sync::Arc;
-
 use anyhow::{Error, Result};
-use bytes::Bytes;
-use reqwest::Client as HttpClient;
-use tinyjson::JsonValue;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 
-use webrtc_unreliable_client_full::{Socket, ServerAddr, AddrCell};
+use webrtc_unreliable_client::{Socket, ServerAddr, AddrCell};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -67,8 +62,8 @@ async fn write_loop(
     addr_cell: AddrCell,
     to_server_sender: mpsc::Sender<Box<[u8]>>,
 ) -> Result<()> {
-    let mut result = Result::<usize>::Ok(0);
-    while result.is_ok() {
+
+    loop {
         let timeout = tokio::time::sleep(Duration::from_secs(1));
         tokio::pin!(timeout);
 
@@ -89,6 +84,4 @@ async fn write_loop(
             }
         };
     }
-
-    Ok(())
 }
